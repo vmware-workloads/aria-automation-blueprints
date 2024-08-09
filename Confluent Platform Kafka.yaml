@@ -1,0 +1,258 @@
+name: kafka
+version: 1.0.0
+formatVersion: 1
+inputs:
+  vmImage:
+    type: string
+    title: VM Image
+    oneOf:
+      - title: Ubuntu Focal (20.04)
+        const: https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.ova
+      - title: Ubuntu Jammy (22.04)
+        const: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.ova
+      - title: Ubuntu Noble (24.04)
+        const: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.ova
+    default: https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.ova
+  vmUsername:
+    type: string
+    title: VM Username
+    default: confluent
+  vmPassword:
+    type: string
+    title: VM Password
+    default: P@ssword123!
+    encrypted: true
+  broker_vmSize:
+    type: string
+    title: Broker VM Size
+    default: large
+    enum:
+      - small
+      - medium
+      - large
+  zookeeper_vmSize:
+    type: string
+    title: Zookeeper VM Size
+    default: small
+    enum:
+      - small
+      - medium
+      - large
+  control-center_vmSize:
+    type: string
+    title: Control-Center VM Size
+    default: medium
+    enum:
+      - small
+      - medium
+      - large
+  zookeper_vmCount:
+    title: Number of Zookeeper VMs
+    type: integer
+    default: 3
+  broker_vmCount:
+    title: Number of Zookeeper VMs
+    type: integer
+    default: 3
+    maximum: 16
+  broker_diskCount:
+    type: integer
+    title: Broker Additonal disks
+    minimum: 1
+    maximum: 8
+  broker_diskSize:
+    type: integer
+    title: Broker Disk Size (GB)
+    minimum: 100
+    maximum: 2048
+  os_diskSize:
+    type: integer
+    title: OS Disk Size (GB)
+    minimum: 60
+    maximum: 200
+    default: 100
+  vmNotes:
+    title: VM Notes
+    type: string
+    default: Kafka
+resources:
+  prod_net:
+    type: Cloud.Network
+    metadata:
+      layoutPosition:
+        - 0
+        - 0
+    properties:
+      name: ls-prod
+      networkType: public
+      constraints:
+        - tag: segment_name:ls-prod
+  web_net:
+    type: Cloud.NSX.Network
+    metadata:
+      layoutPosition:
+        - 1
+        - 0
+    properties:
+      name: ls-web
+      networkType: routed
+  aap_api:
+    type: Custom.api.ansible_automation_platform
+    metadata:
+      layoutPosition:
+        - 2
+        - 0
+    properties:
+      base_url: ${propgroup.ansible_automation_platform_credentials.base_url}
+      username: ${propgroup.ansible_automation_platform_credentials.username}
+      password: ${propgroup.ansible_automation_platform_credentials.password}
+      ssl_verify: ${propgroup.ansible_automation_platform_credentials.ssl_verify}
+      verbose: true
+      organization_name: Default
+      job_template_name: CP-Kafka Template
+      inventory_name: cp-${env.deploymentId}
+      inventory_variables:
+        use_ssl: true
+      hosts:
+        - ${resource.control-center.*}
+        - ${resource.zookeeper.*}
+        - ${resource.kafka-broker.*}
+      host_groups:
+        control_center:
+          - ${resource.control-center.*}
+        zookeeper:
+          - ${resource.zookeeper.*}
+        kafka_broker:
+          - ${resource.kafka-broker.*}
+      host_variables:
+        control_center:
+          rack: 1
+        zookeeper:
+          rack: 1
+        kafka_broker:
+          rack: 1
+  control-center:
+    type: Cloud.vSphere.Machine
+    metadata:
+      layoutPosition:
+        - 2
+        - 1
+    allocatePerInstance: true
+    properties:
+      imageRef: ${input.vmImage}
+      flavor: ${input.control-center_vmSize}
+      remoteAccess:
+        authentication: publicPrivateKey
+        sshKey: ${propgroup.ansible_machine_credentials.public_key}
+        username: ${propgroup.ansible_machine_credentials.username}
+      cloudConfigSettings:
+        deploymentFailOnCloudConfigRuntimeError: true
+      cloudConfig: |
+        #cloud-config
+        users:
+          - default
+          - name: ${propgroup.ansible_machine_credentials.username}
+            shell: /bin/bash
+            sudo: ALL=(ALL) NOPASSWD:ALL
+          - name: ${input.vmUsername}
+            shell: /bin/bash
+            sudo: ALL=(ALL) NOPASSWD:ALL
+        chpasswd:
+          list: |
+            ${input.vmUsername}:${input.vmPassword}
+          expire: False  
+        ssh_pwauth: true
+        runcmd:
+          - netplan apply
+      networks:
+        - network: ${resource.web_net.id}
+          assignment: static
+      storage:
+        bootDiskCapacityInGB: ${input.os_diskSize}
+  zookeeper:
+    type: Cloud.vSphere.Machine
+    metadata:
+      layoutPosition:
+        - 2
+        - 2
+    allocatePerInstance: true
+    properties:
+      imageRef: ${input.vmImage}
+      flavor: ${input.zookeeper_vmSize}
+      remoteAccess:
+        authentication: publicPrivateKey
+        sshKey: ${propgroup.ansible_machine_credentials.public_key}
+        username: ${propgroup.ansible_machine_credentials.username}
+      cloudConfigSettings:
+        deploymentFailOnCloudConfigRuntimeError: true
+      cloudConfig: |
+        #cloud-config
+        hostname: ${self.resourceName}
+        users:
+          - default
+          - name: ${propgroup.ansible_machine_credentials.username}
+            shell: /bin/bash
+            sudo: ALL=(ALL) NOPASSWD:ALL
+          - name: ${input.vmUsername}
+            shell: /bin/bash
+            sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_pwauth: true
+        runcmd:
+          - netplan apply
+      networks:
+        - network: ${resource.web_net.id}
+          assignment: static
+      storage:
+        bootDiskCapacityInGB: ${input.os_diskSize}
+  kafka-broker:
+    type: Cloud.vSphere.Machine
+    metadata:
+      layoutPosition:
+        - 2
+        - 3
+    allocatePerInstance: true
+    properties:
+      imageRef: ${input.vmImage}
+      count: ${input.broker_vmCount}
+      flavor: ${input.broker_vmSize}
+      remoteAccess:
+        authentication: publicPrivateKey
+        sshKey: ${propgroup.ansible_machine_credentials.public_key}
+        username: ${propgroup.ansible_machine_credentials.username}
+      cloudConfigSettings:
+        deploymentFailOnCloudConfigRuntimeError: true
+      attachedDisks: ${map_to_object(slice(resource.broker_disk[*].id, input.broker_diskCount * count.index, input.broker_diskCount * (count.index + 1)), "source")}
+      cloudConfig: |
+        #cloud-config
+        hostname: ${self.resourceName}
+        users:
+          - default
+          - name: ${propgroup.ansible_machine_credentials.username}
+            shell: /bin/bash
+            sudo: ALL=(ALL) NOPASSWD:ALL
+          - name: ${input.vmUsername}
+            shell: /bin/bash
+            sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_pwauth: true
+        runcmd:
+          - netplan apply
+      networks:
+        - network: ${resource.web_net.id}
+          assignment: static
+      storage:
+        bootDiskCapacityInGB: ${input.os_diskSize}
+  broker_disk:
+    type: Cloud.vSphere.Disk
+    metadata:
+      layoutPosition:
+        - 2
+        - 4
+    allocatePerInstance: true
+    properties:
+      capacityGb: ${input.broker_diskSize}
+      SCSIController: ${'SCSI_Controller_' + to_string(count.index % 4)}
+      count: ${input.broker_vmCount * input.broker_diskCount}
+      name: kafka_broker-${count.index}
+      tags:
+        - key: App
+          value: ${to_string('kafka_broker_' + count.index)}

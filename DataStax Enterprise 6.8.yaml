@@ -1,0 +1,150 @@
+name: dse
+version: 1.0.0
+formatVersion: 2
+variables:
+  data_disk:
+    count: 2
+inputs:
+  vmImage:
+    type: string
+    title: VM Image
+    oneOf:
+      - title: Ubuntu Focal (20.04)
+        const: https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.ova
+      - title: Ubuntu Jammy (22.04)
+        const: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.ova
+      - title: Ubuntu Noble (24.04)
+        const: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.ova
+    default: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.ova
+  vmUsername:
+    type: string
+    title: VM Username
+    default: dse
+  vmPassword:
+    type: string
+    title: VM Password
+    default: P@ssword123!
+    encrypted: true
+  dse_host_count:
+    type: integer
+    title: Number of DSE hosts
+    minimum: 4
+    maximum: 16
+    default: 4
+  vmSize:
+    type: string
+    title: DSE VM Size
+    default: medium
+    enum:
+      - small
+      - medium
+      - large
+  os_diskSize:
+    type: integer
+    title: OS Disk Size (GB)
+    minimum: 60
+    maximum: 200
+    default: 60
+  data_diskSize:
+    type: integer
+    title: Data Disk Size (GB)
+    minimum: 50
+    maximum: 500
+    default: 100
+resources:
+  Custom_api_ansible_automation_platform_1:
+    type: Custom.api.ansible_automation_platform
+    metadata:
+      layoutPosition:
+        - 1
+        - 1
+    properties:
+      base_url: ${propgroup.ansible_automation_platform_credentials.base_url}
+      username: ${propgroup.ansible_automation_platform_credentials.username}
+      password: ${propgroup.ansible_automation_platform_credentials.password}
+      ssl_verify: ${propgroup.ansible_automation_platform_credentials.ssl_verify}
+      verbose: true
+      organization_name: Default
+      inventory_name: ${env.deploymentId}
+      job_template_name: DSE Template
+      hosts:
+        - ${resource.dse_vm.*}
+      inventory_variables:
+        use_ssl: true
+      group_variables:
+        dse:
+          color: blue
+          enabled: true
+      host_variables:
+        dse_vm:
+          rack: 1
+      host_groups:
+        dse:
+          - ${resource.dse_vm.*}
+        dse_dc1:
+          - ${resource.dse_vm.*}
+  dse_vm:
+    type: Cloud.vSphere.Machine
+    metadata:
+      layoutPosition:
+        - 3
+        - 2
+    allocatePerInstance: true
+    properties:
+      count: ${input.dse_host_count}
+      image: ubuntu-22.04
+      flavor: ${input.vmSize}
+      remoteAccess:
+        authentication: publicPrivateKey
+        sshKey: ${propgroup.ansible_machine_credentials.public_key}
+        username: ${propgroup.ansible_machine_credentials.username}
+      cloudConfigSettings:
+        deploymentFailOnCloudConfigRuntimeError: true
+      networks:
+        - network: ${resource.web_net.id}
+          assignment: static
+      cloudConfig: |
+        #cloud-config
+        hostname: ${self.resourceName}   
+        users:
+          - default
+          - name: ${propgroup.ansible_machine_credentials.username}
+            shell: /bin/bash
+            sudo: ALL=(ALL) NOPASSWD:ALL
+          - name: ${input.vmUsername}
+            shell: /bin/bash
+            sudo: ALL=(ALL) NOPASSWD:ALL
+        chpasswd:
+          list: |
+            ${input.vmUsername}:${input.vmPassword}
+          expire: False  
+        ssh_pwauth: true
+        runcmd:
+          - netplan apply      
+      attachedDisks: ${map_to_object(slice(resource.disk[*].id, variable.data_disk.count * count.index, variable.data_disk.count * (count.index + 1)), "source")}
+      storage:
+        bootDiskCapacityInGB: ${input.os_diskSize}
+  disk:
+    type: Cloud.vSphere.Disk
+    metadata:
+      layoutPosition:
+        - 4
+        - 2
+    allocatePerInstance: true
+    properties:
+      capacityGb: ${input.data_diskSize}
+      SCSIController: ${'SCSI_Controller_' + to_string(count.index % 4)}
+      name: dse_data-${count.index}
+      tags:
+        - key: App
+          value: ${to_string('dse' + count.index)}
+      count: ${input.dse_host_count * variable.data_disk.count}
+  web_net:
+    type: Cloud.NSX.Network
+    metadata:
+      layoutPosition:
+        - 2
+        - 0
+    properties:
+      name: ls-web
+      networkType: routed
