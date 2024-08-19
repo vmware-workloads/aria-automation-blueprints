@@ -34,11 +34,10 @@ inputs:
   vmSize:
     type: string
     title: DSE VM Size
-    default: medium
+    default: dse-16vcpu-48gb
     enum:
-      - small
-      - medium
-      - large
+      - dse-16vcpu-48gb
+      - dse-16vcpu-64gb
   os_diskSize:
     type: integer
     title: OS Disk Size (GB)
@@ -49,15 +48,11 @@ inputs:
     type: integer
     title: Data Disk Size (GB)
     minimum: 50
-    maximum: 500
-    default: 100
+    maximum: 5000
+    default: 1000
 resources:
   Custom_api_ansible_automation_platform_1:
     type: Custom.api.ansible_automation_platform
-    metadata:
-      layoutPosition:
-        - 1
-        - 1
     properties:
       base_url: ${propgroup.ansible_automation_platform_credentials.base_url}
       username: ${propgroup.ansible_automation_platform_credentials.username}
@@ -65,7 +60,7 @@ resources:
       ssl_verify: ${propgroup.ansible_automation_platform_credentials.ssl_verify}
       verbose: true
       organization_name: Default
-      inventory_name: ${env.deploymentId}
+      inventory_name: ${env.blueprintName}-${env.deploymentId}
       job_template_name: DSE Template
       hosts:
         - ${resource.dse_vm.*}
@@ -85,10 +80,6 @@ resources:
           - ${resource.dse_vm.*}
   dse_vm:
     type: Cloud.vSphere.Machine
-    metadata:
-      layoutPosition:
-        - 3
-        - 2
     allocatePerInstance: true
     properties:
       count: ${input.dse_host_count}
@@ -120,16 +111,12 @@ resources:
           expire: False  
         ssh_pwauth: true
         runcmd:
-          - netplan apply      
+          - netplan apply
       attachedDisks: ${map_to_object(slice(resource.disk[*].id, variable.data_disk.count * count.index, variable.data_disk.count * (count.index + 1)), "source")}
       storage:
         bootDiskCapacityInGB: ${input.os_diskSize}
   disk:
     type: Cloud.vSphere.Disk
-    metadata:
-      layoutPosition:
-        - 4
-        - 2
     allocatePerInstance: true
     properties:
       capacityGb: ${input.data_diskSize}
@@ -141,10 +128,8 @@ resources:
       count: ${input.dse_host_count * variable.data_disk.count}
   web_net:
     type: Cloud.NSX.Network
-    metadata:
-      layoutPosition:
-        - 2
-        - 0
     properties:
       name: ls-web
-      networkType: routed
+      networkType: existing
+      constraints:
+        - tag: segment_name:ls-prod
