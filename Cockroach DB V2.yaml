@@ -1,0 +1,129 @@
+formatVersion: 2
+variables:
+  ports:
+    rpc_port: 26357
+    psql_port: 26257
+    web_port: 8080
+inputs:
+  vmCount:
+    type: integer
+    default: 3
+    minimum: 3
+    maximum: 8
+  vmDataDiskCount:
+    type: integer
+    minimum: 1
+    maximum: 8
+    default: 1
+  vmDataDiskSize:
+    type: integer
+    minimum: 20
+    maximum: 1024
+    default: 40
+  vmUsername:
+    type: string
+    title: VM Username
+    default: crdb
+  vmPassword:
+    type: string
+    title: VM Password
+    default: P@ssword123!
+  vmImage:
+    type: string
+    title: VM Image
+    default: Ubuntu 22.04
+    oneOf:
+      - title: Ubuntu 22.04 (Jammy)
+        const: Ubuntu 22.04
+      - title: Ubuntu 24.04 (Noble)
+        const: Ubuntu 24.04
+resources:
+  crdb-vm:
+    type: Cloud.vSphere.Machine
+    allocatePerInstance: true
+    properties:
+      count: ${input.vmCount}
+      name: ${'crdb-' + to_string(count.index)}
+      image: ${input.vmImage}
+      flavor: Small
+      remoteAccess:
+        authentication: publicPrivateKey
+        skipUserCreation: false
+        username: ${propgroup.ansible_machine_credentials.username}
+        sshKey: ${propgroup.ansible_machine_credentials.public_key}
+      cloudConfigSettings:
+        deploymentFailOnCloudConfigRuntimeError: true
+      cloudConfig: |
+        #cloud-config
+        hostname: ${self.resourceName}   
+        users:
+          - default
+          - name: ${propgroup.ansible_machine_credentials.username}
+            shell: /bin/bash
+            sudo: ALL=(ALL) NOPASSWD:ALL
+          - name: ${input.vmUsername}
+            shell: /bin/bash
+            sudo: ALL=(ALL) NOPASSWD:ALL
+        chpasswd:
+          list: |
+            ${input.vmUsername}:${input.vmPassword}
+          expire: false
+        ssh_pwauth: true
+        runcmd:
+          - netplan apply
+      networks:
+        - network: ${resource['crdb-net'].id}
+          assignment: static
+          domain: tmm.lab
+          dns:
+            - 192.168.240.11
+      storage:
+        bootDiskCapacityInGB: 40
+      attachedDisks: ${map_to_object(slice(resource.disk[*].id, input.vmDataDiskCount * count.index, input.vmDataDiskCount * count.index + 1), "source")}
+  AAP:
+    type: Custom.AAP-Rel
+    dependsOn:
+      - Custom_ptp
+    properties:
+      aapSSL: false
+      organization_name: Default
+      inventory_name: ${env.blueprintName}-${env.deploymentId}
+      job_template_name: Cockroach DB Template
+      verbose: true
+      hosts:
+        - ${resource.crdb-vm.*}
+      host_groups:
+        crdb:
+          - ${resource.crdb-vm.*}
+      group_variables:
+        crdb:
+          psql_port: ${variable.ports.psql_port}
+          rpc_port: ${variable.ports.rpc_port}
+  disk:
+    type: Cloud.vSphere.Disk
+    allocatePerInstance: true
+    properties:
+      capacityGb: ${input.vmDataDiskSize}
+      SCSIController: ${'SCSI_Controller_' + to_string(count.index % 4)}
+      count: ${input.vmCount * input.vmCount}
+      name: ${'crdb-disk-' + to_string(count.index % 4)}
+      tags:
+        - key: App
+          value: ${to_string('crdb_' + count.index)}
+  Custom_ptp:
+    type: Custom.auto_ptp
+    allocatePerInstance: true
+    properties:
+      count: ${input.vmCount}
+      vm: ${to_string(slice(resource.crdb-vm[*].resourceName, count.index, count.index + 1)[0])}
+  crdb-net:
+    type: Cloud.NSX.Network
+    properties:
+      name: ls-public-net
+      networkType: routed
+  Cloud_NSX_Gateway_1:
+    type: Cloud.NSX.Gateway
+    properties:
+      name: t1-crdb-gw
+      networks:
+        - ${resource.crdb-net.id}
